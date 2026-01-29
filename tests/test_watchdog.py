@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from spotjax.watchdog import CheckpointWatchdog
+from spotax.watchdog import CheckpointWatchdog
 
 
 class TestCheckpointWatchdogInit:
@@ -168,7 +168,7 @@ class TestCheckpointWatchdogStallDetection:
             # Return the same old checkpoint
             mock_get.return_value = ("prefix/ckpt-old", old_time)
 
-            with patch("spotjax.watchdog.print_warning") as mock_warn:
+            with patch("spotax.watchdog.print_warning") as mock_warn:
                 await watchdog._check_once()
                 mock_warn.assert_called_once()
                 assert "No new checkpoint" in mock_warn.call_args[0][0]
@@ -193,7 +193,7 @@ class TestCheckpointWatchdogStallDetection:
         with patch.object(watchdog, "_get_latest_checkpoint") as mock_get:
             mock_get.return_value = ("prefix/ckpt-old", old_time)
 
-            with patch("spotjax.watchdog.print_warning") as mock_warn:
+            with patch("spotax.watchdog.print_warning") as mock_warn:
                 # First check shows warning
                 await watchdog._check_once()
                 assert mock_warn.call_count == 1

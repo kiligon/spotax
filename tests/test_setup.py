@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from spotjax.setup import (
+from spotax.setup import (
     PrerequisiteResult,
     SetupChecker,
     check_prerequisites_quick,

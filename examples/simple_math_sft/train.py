@@ -3,15 +3,14 @@
 Fine-tunes Qwen3 on GSM8K grade school math word problems.
 
 Usage:
-    python train.py --local --max_steps=100
-    spotjax run --tpu=v5e-8 --script=train.py
+    spotax run --tpu=v5litepod-8 train.py
 """
 
 import argparse
 import logging
-import os
 import time
 
+import jax
 import jax.numpy as jnp
 import optax
 from flax import nnx
@@ -20,14 +19,38 @@ from huggingface_hub import snapshot_download
 from bonsai.models.qwen3.modeling import Qwen3, ModelConfig
 from bonsai.models.qwen3.params import create_model_from_safe_tensors
 from data import create_dataloader, get_tokenizer
+from spotax_utils import get_config, setup_distributed, CheckpointManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
 log = logging.getLogger(__name__)
 
 
-def load_model(model_name: str) -> tuple[Qwen3, ModelConfig, int]:
+def setup_mesh(tp_size: int = 1):
+    """Create and set a mesh for FSDP + TP sharding across all devices.
+
+    Args:
+        tp_size: Tensor parallelism size. Default 1 (pure FSDP).
+                 Set to 2 or 4 for tensor parallelism.
+    """
+    devices = jax.devices()
+    num_devices = len(devices)
+
+    # Bonsai's default sharding uses "fsdp" and "tp" axes
+    # Use AxisType.Auto so with_sharding_constraint actually reshards
+    # (with Explicit, it only asserts and fails if sharding doesn't match)
+    fsdp_size = num_devices // tp_size
+    mesh = jax.make_mesh(
+        (fsdp_size, tp_size),
+        ("fsdp", "tp"),
+        axis_types=(jax.sharding.AxisType.Auto, jax.sharding.AxisType.Auto),
+    )
+    jax.set_mesh(mesh)
+    log.info(f"Mesh created: fsdp={fsdp_size}, tp={tp_size} on {num_devices} devices (Auto axis types)")
+
+
+def load_model(model_name: str, use_sharding: bool = True) -> tuple[Qwen3, ModelConfig, int]:
     """Load Qwen3 model from HuggingFace."""
-    log.info(f"Loading {model_name}...")
+    log.info(f"Loading {model_name} (sharding={use_sharding})...")
     path = snapshot_download(model_name)
 
     configs = {
@@ -37,11 +60,11 @@ def load_model(model_name: str) -> tuple[Qwen3, ModelConfig, int]:
         "8B": ModelConfig.qwen3_8b,
     }
     config_fn = next((v for k, v in configs.items() if k in model_name), ModelConfig.qwen3_0_6b)
-    config = config_fn(use_sharding=False)
+    config = config_fn(use_sharding=use_sharding)  # Enable sharding!
 
     model = create_model_from_safe_tensors(path, config)
     pad_id = get_tokenizer(model_name).pad_token_id
-    log.info(f"Loaded: {config.num_layers} layers, {config.emb_dim} dim")
+    log.info(f"Loaded: {config.num_layers} layers, {config.emb_dim} dim, sharding={config.shd_cfg}")
     return model, config, pad_id
 
 
@@ -73,21 +96,16 @@ def train(
     lr: float = 1e-5,
     log_every: int = 10,
     save_every: int = 100,
-    local: bool = False,
 ):
     # Setup
-    if local:
-        ckpt_dir = "/tmp/simple_math_sft_ckpt"
-        os.makedirs(ckpt_dir, exist_ok=True)
-        worker_id, num_workers, is_restart = 0, 1, False
-    else:
-        from spotjax_utils import get_config, setup_distributed, CheckpointManager
-        cfg = get_config()
-        setup_distributed(cfg)
-        ckpt_dir = cfg.checkpoint_dir
-        worker_id, num_workers, is_restart = cfg.worker_id, cfg.num_workers, cfg.is_restart
+    cfg = get_config()
+    setup_distributed(cfg)
+    setup_mesh()  # Create mesh for sharding across all TPU devices
+    ckpt_dir = cfg.checkpoint_dir
+    worker_id = cfg.worker_id
+    num_workers = cfg.num_workers
 
-    log.info(f"Worker {worker_id}/{num_workers}")
+    log.info(f"Worker {worker_id}/{num_workers}, devices: {jax.device_count()}")
 
     # Model & optimizer
     model, config, pad_id = load_model(model_name)
@@ -95,30 +113,19 @@ def train(
     opt = nnx.Optimizer(model, tx, wrt=nnx.Param)
 
     # Checkpointing
-    start_step = 0
-    if local:
-        import orbax.checkpoint as ocp
-        ckpt = ocp.CheckpointManager(ckpt_dir, options=ocp.CheckpointManagerOptions(max_to_keep=3))
-        if ckpt.latest_step():
-            log.info(f"Restoring from step {ckpt.latest_step()}")
-            gdef, state = nnx.split(model)
-            state = ckpt.restore(ckpt.latest_step(), args=ocp.args.StandardRestore(state))
-            model = nnx.merge(gdef, state)
-            opt = nnx.Optimizer(model, tx, wrt=nnx.Param)
-            start_step = ckpt.latest_step()
-    else:
-        ckpt = CheckpointManager(ckpt_dir, save_interval_steps=save_every)
-        _, state = nnx.split(model)
-        state, start_step = ckpt.restore_or_init(state, 0)
-        if start_step > 0:
-            model = nnx.merge(nnx.split(model)[0], state)
-            opt = nnx.Optimizer(model, tx, wrt=nnx.Param)
+    ckpt = CheckpointManager(ckpt_dir, save_interval_steps=save_every)
+    _, state = nnx.split(model)
+    state, start_step = ckpt.restore_or_init(state, 0)
+    if start_step > 0:
+        log.info(f"Restored from step {start_step}")
+        model = nnx.merge(nnx.split(model)[0], state)
+        opt = nnx.Optimizer(model, tx, wrt=nnx.Param)
 
-    # Data (GSM8K loaded from HuggingFace, cached locally)
+    # Data
     loader = create_dataloader(batch_size, max_length, model_name, worker_id=worker_id, num_workers=num_workers)
     data = iter(loader)
 
-    # Train step (JIT compiled)
+    # Train step
     @nnx.jit
     def train_step(model, opt, input_ids, labels):
         def loss_fn(m):
@@ -149,33 +156,26 @@ def train(
 
         if step % save_every == 0:
             _, state = nnx.split(model)
-            if local:
-                ckpt.save(step, args=ocp.args.StandardSave(state))
-            else:
-                ckpt.save(step, state)
-                if ckpt.reached_preemption(step):
-                    log.info("Preemption detected")
-                    break
+            ckpt.save(step, state)
+            if ckpt.reached_preemption(step):
+                log.info("Preemption detected")
+                break
 
+    # Final save
     log.info(f"Done at step {step}")
     _, state = nnx.split(model)
-    if local:
-        ckpt.save(step, args=ocp.args.StandardSave(state))
-        ckpt.wait_until_finished()
-    else:
-        ckpt.save(step, state)
+    ckpt.save(step, state)
     ckpt.close()
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--model_name", default="Qwen/Qwen3-1.7B")
-    p.add_argument("--batch_size", type=int, default=1)
+    p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--max_length", type=int, default=512)
-    p.add_argument("--max_steps", type=int, default=1000)
+    p.add_argument("--max_steps", type=int, default=1000**100)
     p.add_argument("--lr", type=float, default=1e-5)
-    p.add_argument("--log_every", type=int, default=1)
+    p.add_argument("--log_every", type=int, default=10)
     p.add_argument("--save_every", type=int, default=100)
-    p.add_argument("--local", action="store_true")
     args = p.parse_args()
     train(**vars(args))

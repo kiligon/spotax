@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from spotjax.infra.storage import StorageProvider
+from spotax.infra.storage import StorageProvider
 
 
 class TestStorageProvider:

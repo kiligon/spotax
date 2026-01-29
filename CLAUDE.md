@@ -24,11 +24,10 @@ uv run ruff check src/ tests/
 uv run ruff check src/ tests/ --fix
 
 # Run the CLI
-uv run spotjax --help
-uv run spotjax setup          # Check prerequisites
-uv run spotjax setup --fix    # Auto-fix prerequisites
-uv run spotjax run --help
-uv run spotjax init --help
+uv run spotax --help
+uv run spotax setup          # Check prerequisites
+uv run spotax setup --fix    # Auto-fix prerequisites
+uv run spotax run --help
 ```
 
 ## Architecture
@@ -58,9 +57,7 @@ CLI (main.py) → Orchestrator → TPUProvider (provision TPU)
 
 - **`watchdog.py`**: `CheckpointWatchdog` monitors GCS for new checkpoints. Warns if training appears stalled (no checkpoint for 60 min).
 
-- **`scaffold.py`**: Generates `spotjax_utils.py` via Jinja2 template for user projects. The generated file has no runtime dependency on SpotJAX.
-
-- **`setup.py`**: Prerequisites checker. Validates gcloud, ADC, SSH keys, OS Login. The `spotjax setup` command uses this.
+- **`setup.py`**: Prerequisites checker. Validates gcloud, ADC, SSH keys, OS Login. The `spotax setup` command uses this.
 
 - **`config.py`**: Pydantic models (`TPUConfig`, `RunConfig`, `StorageConfig`, `SpotJAXConfig`). Validates TPU types, zones, bucket names.
 
@@ -73,7 +70,7 @@ The CLI injects these env vars into remote TPU nodes:
 - `SPOT_NUM_WORKERS`: Total node count
 - `JAX_COORDINATOR_ADDRESS`: IP:port for JAX distributed
 
-User code reads these via the generated `spotjax_utils.py`.
+User code reads these via `spotax_utils.py` (copied from examples/).
 
 ### Async Patterns
 

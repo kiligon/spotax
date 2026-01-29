@@ -1,5 +1,5 @@
 [project]
-name = "spotjax"
+name = "spotax"
 version = "0.1.0"
 description = "CLI tool for orchestrating JAX training on Google Cloud Spot TPUs"
 readme = "README.md"
@@ -28,7 +28,6 @@ dependencies = [
     "google-cloud-storage>=2.14.0",
     "pydantic>=2.5.0",
     "pyyaml>=6.0",
-    "jinja2>=3.1.0",
     "jax>=0.6.2",
 ]
 
@@ -40,17 +39,14 @@ dev = [
 ]
 
 [project.scripts]
-spotjax = "spotjax.main:app"
+spotax = "spotax.main:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/spotjax"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/spotjax/templates" = "spotjax/templates"
+packages = ["src/spotax"]
 
 [tool.ruff]
 target-version = "py310"
@@ -75,7 +71,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["spotjax"]
+known-first-party = ["spotax"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

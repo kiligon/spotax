@@ -45,10 +45,10 @@ python train.py --local --max_steps=100 --batch_size=4
 cd examples/simple_math_sft
 
 # Generate SpotJAX utilities
-spotjax init
+spotax init
 
 # Run on spot TPU
-spotjax run \
+spotax run \
   --tpu=v5e-8 \
   --zone=us-central1-a \
   --script=train.py \
@@ -58,7 +58,7 @@ spotjax run \
 ### 3. Multi-Host TPU (v5e-32)
 
 ```bash
-spotjax run \
+spotax run \
   --tpu=v5e-32 \
   --zone=us-central1-a \
   --script=train.py \
@@ -112,7 +112,7 @@ Uses [jax-ml/bonsai](https://github.com/jax-ml/bonsai) Qwen3 implementation:
 ### Checkpointing (SpotJAX + Orbax)
 
 ```python
-from spotjax_utils import CheckpointManager, get_config
+from spotax_utils import CheckpointManager, get_config
 
 config = get_config()
 ckpt = CheckpointManager(config.checkpoint_dir)
@@ -153,10 +153,10 @@ To use a larger model:
 
 ```bash
 # Qwen3-1.7B (needs more memory)
-spotjax run --tpu=v5e-16 --script=train.py -- --model=Qwen/Qwen3-1.7B --batch_size=4
+spotax run --tpu=v5e-16 --script=train.py -- --model=Qwen/Qwen3-1.7B --batch_size=4
 
 # Qwen3-4B
-spotjax run --tpu=v5e-32 --script=train.py -- --model=Qwen/Qwen3-4B --batch_size=2
+spotax run --tpu=v5e-32 --script=train.py -- --model=Qwen/Qwen3-4B --batch_size=2
 ```
 
 ## Troubleshooting

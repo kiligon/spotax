@@ -1,10 +1,9 @@
-# Simple Math SFT Example Dependencies
+# ImageNet EfficientNet Example Dependencies
 #
 # SpotJAX automatically uses the TPU JAX releases URL when installing.
 # For local development: pip install -r requirements.txt
 
-# JAX with TPU support - bonsai requires JAX 0.8+
-# SpotJAX adds the TPU releases index automatically
+# JAX with TPU support
 jax[tpu]>=0.8.0
 
 # Flax NNX (modern neural network API)
@@ -12,6 +11,9 @@ flax>=0.8.0
 
 # Bonsai - JAX model implementations
 # NOTE: bonsai has broken package metadata, installed via spotax_setup.sh instead
+
+# timm - For loading pretrained EfficientNet weights
+timm>=1.0.0
 
 # Optax - JAX optimizer library
 optax>=0.2.0
@@ -22,11 +24,11 @@ orbax-checkpoint>=0.5.0
 # Grain - Data loading
 grain>=0.2.0
 
-# HuggingFace Transformers (for tokenizer)
-transformers>=4.40.0
+# TensorFlow (only for TFRecord parsing - optional if using synthetic data)
+tensorflow>=2.15.0
 
-# HuggingFace Datasets (for GSM8K)
-datasets>=2.18.0
+# PIL for image decoding and preprocessing
+pillow>=10.0.0
 
 # Utilities
 numpy>=1.24.0

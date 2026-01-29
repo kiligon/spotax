@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from spotjax.orchestrator import AttemptResult, RunResult
+from spotax.orchestrator import AttemptResult, RunResult
 
 
 class TestRunResult:
