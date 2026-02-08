@@ -23,20 +23,20 @@ class TestTPUConfig:
 
     def test_valid_tpu_types(self):
         """Test valid TPU type formats."""
-        valid_types = ["v4-8", "v4-16", "v4-32", "v4-64", "v4-128", "v5p-8", "v5p-16"]
+        valid_types = ["v4-8", "v4-16", "v4-32", "v4-64", "v4-128", "v5p-8", "v5p-16", "v5litepod-1", "v5litepod-8"]
         for tpu_type in valid_types:
-            config = TPUConfig(tpu_type=tpu_type, zone="us-central2-b", project="test-project")
+            config = TPUConfig(tpu_type=tpu_type, zone="us-central1-a", project="test-project")
             assert config.tpu_type == tpu_type
 
     def test_invalid_tpu_type(self):
         """Test invalid TPU type raises error."""
         with pytest.raises(ValueError, match="Invalid TPU type"):
-            TPUConfig(tpu_type="invalid-type", zone="us-central2-b", project="test-project")
+            TPUConfig(tpu_type="invalid-type", zone="us-central1-a", project="test-project")
 
     def test_valid_zone_format(self):
         """Test valid zone format."""
-        config = TPUConfig(tpu_type="v4-8", zone="us-central2-b", project="test-project")
-        assert config.zone == "us-central2-b"
+        config = TPUConfig(tpu_type="v4-8", zone="us-central1-a", project="test-project")
+        assert config.zone == "us-central1-a"
 
     def test_invalid_zone_format(self):
         """Test invalid zone format raises error."""
@@ -53,7 +53,7 @@ class TestTPUConfig:
             ("v5p-8", 2),
         ]
         for tpu_type, expected_nodes in test_cases:
-            config = TPUConfig(tpu_type=tpu_type, zone="us-central2-b", project="test-project")
+            config = TPUConfig(tpu_type=tpu_type, zone="us-central1-a", project="test-project")
             assert config.num_nodes == expected_nodes, f"Failed for {tpu_type}"
 
 
@@ -137,14 +137,14 @@ class TestSpotJAXConfig:
             config = SpotJAXConfig.from_cli_args(
                 script=str(script_path),
                 tpu_type="v4-8",
-                zone="us-central2-b",
+                zone="us-central1-a",
                 project="test-project",
                 bucket="test-bucket",
                 job_id="test-job",
             )
 
             assert config.tpu.tpu_type == "v4-8"
-            assert config.tpu.zone == "us-central2-b"
+            assert config.tpu.zone == "us-central1-a"
             assert config.tpu.project == "test-project"
             assert config.storage.bucket == "test-bucket"
             assert config.storage.job_id == "test-job"

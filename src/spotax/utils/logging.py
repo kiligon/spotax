@@ -111,7 +111,8 @@ class NodeLogger:
         if self.stream_to_console:
             for line in text.splitlines():
                 if self.single_node:
-                    console.print(line, highlight=False)
+                    # Use JAX blue for single-node output
+                    console.print(line, style="node", highlight=False)
                 else:
                     console.print(f"{self.prefix} {line}", style=self.style, highlight=False)
 

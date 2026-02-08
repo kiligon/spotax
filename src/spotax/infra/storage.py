@@ -45,7 +45,7 @@ class StorageProvider:
         def _check():
             try:
                 bucket = self.client.bucket(bucket_name)
-                bucket.reload() # why we need to reload?
+                bucket.reload()
                 return True
             except gcp_exceptions.NotFound:
                 return False
@@ -92,9 +92,9 @@ class StorageProvider:
         if await self.bucket_exists(bucket_name):
             print_status(f"Using existing bucket: gs://{bucket_name}")
         else:
-            print_status(f"Creating bucket: gs://{bucket_name}")
+            print_status(f"Creating bucket: gs://{bucket_name} (region: {location})")
             try:
-                await self.create_bucket(bucket_name, location) # don't we duble the function it's already create bucket if not exsis maybe it's ok
+                await self.create_bucket(bucket_name, location)
                 print_status(f"Bucket created: gs://{bucket_name}", style="success")
             except Exception as e:
                 print_warning(f"Failed to create bucket: {e}")
