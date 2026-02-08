@@ -196,8 +196,8 @@ class SpotJAXConfig(BaseModel):
     def from_cli_args(
         cls,
         script: str,
-        tpu_type: str = "v4-8",
-        zone: str = "us-central2-b",
+        tpu_type: str = "v5litepod-1",
+        zone: str = "us-central1-a",
         project: str | None = None,
         bucket: str | None = None,
         job_id: str | None = None,

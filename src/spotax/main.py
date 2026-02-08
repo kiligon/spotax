@@ -69,7 +69,7 @@ def run(
             "-t",
             help="TPU type (e.g., v4-8, v4-32, v5p-16)",
         ),
-    ] = "v4-8", #TODO consider maybe remove as default
+    ] = "v5litepod-1",
     zone: Annotated[
         str,
         typer.Option(
@@ -77,13 +77,13 @@ def run(
             "-z",
             help="GCP zone (e.g., us-central2-b)",
         ),
-    ] = "us-central2-b", #TODO consider maybe remove as default
+    ] = "us-central1-a",
     project: Annotated[
         str | None,
         typer.Option(
             "--project",
             "-p",
-            help="GCP project ID (auto-detect from environment if not set)", #TODO find how it's finded
+            help="GCP project ID (auto-detect from environment if not set)",
         ),
     ] = None,
     bucket: Annotated[
@@ -108,7 +108,7 @@ def run(
             "--max-retries",
             help="Maximum restart attempts on failure",
         ),
-    ] = 5, # do we actualy need to do this maybe we need to restact until training is finished?
+    ] = 5,
     worker: Annotated[
         int,
         typer.Option(
@@ -161,7 +161,7 @@ def run(
         raise typer.Exit(1) from e
 
     # Check prerequisites before running
-    from spotax.setup import check_prerequisites_quick  # i think better to do full check
+    from spotax.setup import check_prerequisites_quick
 
     prereq_ok, prereq_errors = check_prerequisites_quick()
     if not prereq_ok:
@@ -203,7 +203,7 @@ def setup(
 
     from spotax.setup import run_setup
 
-    success = asyncio.run(run_setup(fix=fix)) # dont undersund why we use asunc for these i am not sure
+    success = asyncio.run(run_setup(fix=fix))
     raise typer.Exit(0 if success else 1)
 
 
