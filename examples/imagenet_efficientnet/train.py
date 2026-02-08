@@ -1,16 +1,3 @@
-"""ImageNet training with Bonsai EfficientNet-B2.
-
-Fine-tunes or trains EfficientNet-B2 on ImageNet-1K.
-Uses simple data parallelism - no complex FSDP/TP mesh needed.
-
-Usage:
-    # With real ImageNet TFRecords on GCS
-    spotax run --tpu=v5litepod-8 train.py -- --data_dir=gs://your-bucket/imagenet
-
-    # With synthetic data (for testing)
-    spotax run --tpu=v5litepod-8 train.py -- --use_synthetic
-"""
-
 import argparse
 import logging
 import time
@@ -18,11 +5,10 @@ import time
 import jax
 import jax.numpy as jnp
 import optax
-from flax import nnx
-
 from bonsai.models.efficientnet.modeling import EfficientNet, ModelConfig
 from bonsai.models.efficientnet.params import create_efficientnet_from_pretrained
 from data import create_dataloader
+from flax import nnx
 from spotax_utils import CheckpointManager, get_config, setup_distributed
 
 logging.basicConfig(
@@ -63,6 +49,9 @@ def create_model(num_classes: int = 1000, pretrained: bool = True) -> EfficientN
             )
         model = EfficientNet(cfg, rngs=nnx.Rngs(0))
 
+    # Provide RNG for dropout (Bonsai doesn't set one during init)
+    model.dropout.rngs = nnx.Rngs(0)
+
     # Count parameters
     params = nnx.state(model, nnx.Param)
     param_count = sum(p.size for p in jax.tree.leaves(params))
@@ -82,7 +71,7 @@ def compute_loss(model: EfficientNet, images: jnp.ndarray, labels: jnp.ndarray):
     Returns:
         (loss, metrics_dict)
     """
-    logits = model(images)  # [B, num_classes]
+    logits = model(images, training=True)  # [B, num_classes]
 
     # Cross-entropy loss
     loss = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
@@ -109,8 +98,10 @@ def train(
     weight_decay: float = 1e-4,
     log_every: int = 50,
     save_every: int = 1000,
-    pretrained: bool = True,
+    pretrained: bool = False,
     use_synthetic: bool = False,
+    shuffle: bool = False,
+    prefetch_workers: int = 4,
 ):
     """Main training function.
 
@@ -125,6 +116,8 @@ def train(
         save_every: Save checkpoint every N steps
         pretrained: Start from pretrained weights
         use_synthetic: Use synthetic data for testing
+        shuffle: Whether to shuffle data (default False, gcsfuse is slow with random access)
+        prefetch_workers: Number of background workers for data prefetching
     """
     # Setup distributed training
     cfg = get_config()
@@ -135,8 +128,9 @@ def train(
     num_workers = cfg.num_workers
     num_devices = jax.device_count()
 
-    log.info(f"Worker {worker_id}/{num_workers}, devices: {num_devices}")
-    log.info(f"Global batch size: {batch_size * num_devices}")
+    log.info(f"Worker {worker_id}/{num_workers}, devices: {num_devices}, "
+             f"platform: {jax.devices()[0].platform}, "
+             f"global batch size: {batch_size * num_devices}")
 
     # Create model
     model = create_model(pretrained=pretrained)
@@ -174,6 +168,8 @@ def train(
         worker_id=worker_id,
         num_workers=num_workers,
         use_synthetic=use_synthetic,
+        shuffle=shuffle,
+        prefetch_workers=prefetch_workers,
     )
     data_iter = iter(loader)
 
@@ -189,16 +185,23 @@ def train(
         opt.update(model, grads)
         return metrics
 
-    # Training loop
-    log.info(f"Training from step {start_step}")
-    step = start_step
+    # First step (includes JIT compilation)
+    log.info(f"Starting training from step {start_step}...")
+    batch = next(data_iter)
+    images = jnp.array(batch["image"])
+    labels = jnp.array(batch["label"])
     t0 = time.time()
-    running_loss = 0.0
-    running_acc = 0.0
-    running_top5 = 0.0
+    metrics = train_step(model, opt, images, labels)
+    jax.block_until_ready(metrics)
+    log.info(f"JIT compilation done in {time.time() - t0:.1f}s")
+
+    step = start_step + 1
+    t0 = time.time()
+    running_loss = float(metrics["loss"])
+    running_acc = float(metrics["acc"])
+    running_top5 = float(metrics["top5_acc"])
 
     while step < max_steps:
-        # Get batch
         try:
             batch = next(data_iter)
         except StopIteration:
@@ -207,8 +210,6 @@ def train(
 
         images = jnp.array(batch["image"])
         labels = jnp.array(batch["label"])
-
-        # Train step
         metrics = train_step(model, opt, images, labels)
         step += 1
 
@@ -259,21 +260,30 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Train EfficientNet-B2 on ImageNet")
     p.add_argument(
         "--data_dir",
-        default="gs://imagenet-tpu-training/",
-        help="GCS path to ImageNet TFRecords (e.g., gs://bucket/imagenet)",
+        default="gs://imagenet-training-tpu ",
+        help="GCS path to ImageNet ArrayRecords (expects train_arrayrecord/ subdir)",
     )
-    p.add_argument("--batch_size", type=int, default=64, help="Per-device batch size")
-    p.add_argument("--max_steps", type=int, default=100000, help="Max training steps")
-    p.add_argument("--lr", type=float, default=1e-3, help="Peak learning rate")
-    p.add_argument("--warmup_steps", type=int, default=1000, help="LR warmup steps")
+    p.add_argument("--batch_size", type=int, default=128, help="Per-device batch size")
+    p.add_argument("--max_steps", type=int, default=10000, help="Max training steps")
+    p.add_argument("--lr", type=float, default=1e-1, help="Peak learning rate")
+    p.add_argument("--warmup_steps", type=int, default=1500, help="LR warmup steps")
     p.add_argument("--weight_decay", type=float, default=1e-4, help="AdamW weight decay")
     p.add_argument("--log_every", type=int, default=50, help="Log every N steps")
-    p.add_argument("--save_every", type=int, default=1000, help="Save every N steps")
+    p.add_argument("--save_every", type=int, default=100, help="Save every N steps")
     p.add_argument(
-        "--no_pretrained", action="store_true", help="Train from scratch (no pretrained)"
+        "--pretrained", action="store_true", help="Start from pretrained weights (default: train from scratch)"
     )
     p.add_argument(
         "--use_synthetic", action="store_true", help="Use synthetic data for testing"
+    )
+    p.add_argument(
+        "--shuffle", action="store_true", help="Enable data shuffling (disabled by default)"
+    )
+    p.add_argument(
+        "--prefetch_workers",
+        type=int,
+        default=2,
+        help="Number of prefetch workers (0=disabled, default=2)",
     )
     args = p.parse_args()
 
@@ -286,6 +296,8 @@ if __name__ == "__main__":
         weight_decay=args.weight_decay,
         log_every=args.log_every,
         save_every=args.save_every,
-        pretrained=not args.no_pretrained,
+        pretrained=args.pretrained,
         use_synthetic=args.use_synthetic,
+        shuffle=args.shuffle,
+        prefetch_workers=args.prefetch_workers,
     )

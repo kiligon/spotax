@@ -4,10 +4,10 @@
 # For local development: pip install -r requirements.txt
 
 # JAX with TPU support
-jax[tpu]>=0.8.0
+jax[tpu]
 
 # Flax NNX (modern neural network API)
-flax>=0.8.0
+flax
 
 # Bonsai - JAX model implementations
 # NOTE: bonsai has broken package metadata, installed via spotax_setup.sh instead
@@ -16,20 +16,21 @@ flax>=0.8.0
 timm>=1.0.0
 
 # Optax - JAX optimizer library
-optax>=0.2.0
+optax
 
 # Orbax - Checkpointing
-orbax-checkpoint>=0.5.0
+orbax-checkpoint
 
-# Grain - Data loading
-grain>=0.2.0
+# Grain - Data loading (with ArrayRecord support)
+grain
+array-record
 
-# TensorFlow (only for TFRecord parsing - optional if using synthetic data)
-tensorflow>=2.15.0
+# msgpack - For efficient serialization (used by ArrayRecord pipeline)
+msgpack
 
 # PIL for image decoding and preprocessing
-pillow>=10.0.0
+pillow
 
 # Utilities
 numpy>=1.24.0
-gcsfs>=2024.2.0  # For GCS checkpoint access
+gcsfs  # For GCS checkpoint access

@@ -1,23 +1,22 @@
-"""ImageNet data loading with Grain and JAX.
+"""ImageNet data loading with Grain and ArrayRecord.
 
-Expects ImageNet in TFRecord format at:
-    gs://your-bucket/imagenet/train/*.tfrecord
-    gs://your-bucket/imagenet/validation/*.tfrecord
+Expects ImageNet in ArrayRecord format (converted from TFRecords):
+    gs://your-bucket/imagenet/train_arrayrecord/*.arrayrecord
+    gs://your-bucket/imagenet/validation_arrayrecord/*.arrayrecord
 
-Each TFRecord contains examples with:
-    - 'image/encoded': JPEG bytes
-    - 'image/class/label': int64 label (0-999)
+Each ArrayRecord contains msgpack-serialized examples:
+    {"image": <jpeg_bytes>, "label": <int>}
 
-Uses array_record for efficient random access on GCS.
+Uses gcsfuse to mount GCS buckets for efficient access.
+See convert_to_arrayrecord.py for conversion instructions.
 """
 
 import io
 import logging
-from functools import partial
+import os
+import subprocess
 
 import grain.python as grain
-import jax
-import jax.numpy as jnp
 import numpy as np
 from PIL import Image
 
@@ -26,6 +25,77 @@ log = logging.getLogger(__name__)
 # ImageNet mean/std (RGB order)
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+
+def ensure_gcs_accessible(gcs_path: str) -> str:
+    """Mount GCS path via gcsfuse and return local path.
+
+    Args:
+        gcs_path: GCS path like gs://bucket/path or local path
+
+    Returns:
+        Local path (either original or mounted)
+
+    Raises:
+        RuntimeError: If gcsfuse is not installed or mount fails
+    """
+    # Strip whitespace to handle accidental trailing spaces
+    gcs_path = gcs_path.strip()
+
+    if not gcs_path.startswith("gs://"):
+        return gcs_path  # Already local
+
+    # Parse bucket and subpath
+    path_without_prefix = gcs_path[5:]  # Remove "gs://"
+    parts = path_without_prefix.split("/", 1)
+    bucket = parts[0]
+    subpath = parts[1] if len(parts) > 1 else ""
+
+    # Use user-writable cache directory
+    cache_root = os.path.expanduser("~/.cache/gcs")
+    mount_point = os.path.join(cache_root, bucket)
+    local_path = os.path.join(mount_point, subpath) if subpath else mount_point
+
+    # Check if already mounted
+    if os.path.ismount(mount_point):
+        log.info(f"GCS bucket already mounted: {mount_point}")
+        return local_path
+
+    # Check gcsfuse is available
+    import shutil
+    if not shutil.which("gcsfuse"):
+        raise RuntimeError(
+            "gcsfuse is not installed. Install it with:\n"
+            "  sudo apt-get install gcsfuse\n"
+            "Or on TPU VMs, it should be pre-installed."
+        )
+
+    # Create mount point and mount
+    os.makedirs(mount_point, exist_ok=True)
+    log.info(f"Mounting gs://{bucket} to {mount_point}")
+
+    try:
+        subprocess.run(
+            [
+                "gcsfuse",
+                "--implicit-dirs",
+                "--type-cache-max-size-mb=-1",
+                "--stat-cache-max-size-mb=-1",
+                "--kernel-list-cache-ttl-secs=-1",
+                "--metadata-cache-ttl-secs=-1",
+                "--max-conns-per-host=100",
+                bucket,
+                mount_point,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        log.info(f"Mounted gs://{bucket} successfully")
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"gcsfuse mount failed: {e.stderr}") from e
+
+    return local_path
 
 
 class SimpleImageSource(grain.RandomAccessDataSource):
@@ -53,69 +123,24 @@ class SimpleImageSource(grain.RandomAccessDataSource):
         return {"image": image, "label": label}
 
 
-class TFRecordSource(grain.RandomAccessDataSource):
-    """Data source for TFRecord files on GCS using tf.data for parsing only."""
+class ParseMsgpackOp(grain.MapTransform):
+    """Parse msgpack-serialized ArrayRecord entries."""
 
-    def __init__(self, tfrecord_pattern: str, shuffle_files: bool = True):
-        """Initialize TFRecord data source.
+    def __init__(self, label_offset: int = 0):
+        """Initialize parser.
 
         Args:
-            tfrecord_pattern: Glob pattern for TFRecord files (e.g., gs://bucket/train/*.tfrecord)
-            shuffle_files: Whether to shuffle file order
+            label_offset: Offset to subtract from labels.
+                         Use -1 if labels are 1-indexed (1-1000) to convert to 0-indexed (0-999).
         """
-        import tensorflow as tf
+        self.label_offset = label_offset
 
-        self._files = tf.io.gfile.glob(tfrecord_pattern)
-        if not self._files:
-            raise ValueError(f"No TFRecord files found: {tfrecord_pattern}")
+    def map(self, raw_bytes: bytes) -> dict:
+        import msgpack
 
-        if shuffle_files:
-            np.random.shuffle(self._files)
-
-        log.info(f"Found {len(self._files)} TFRecord files")
-
-        # Build index: map global index -> (file_idx, local_idx)
-        self._index = []
-        self._file_data = []  # Store parsed data per file
-
-        for file_idx, path in enumerate(self._files):
-            ds = tf.data.TFRecordDataset(path)
-            count = sum(1 for _ in ds)
-            for local_idx in range(count):
-                self._index.append((file_idx, local_idx))
-            self._file_data.append(None)  # Lazy load
-
-        log.info(f"Total examples: {len(self._index)}")
-
-    def __len__(self) -> int:
-        return len(self._index)
-
-    def __getitem__(self, idx: int) -> dict:
-        import tensorflow as tf
-
-        file_idx, local_idx = self._index[idx]
-
-        # Lazy load and cache file data
-        if self._file_data[file_idx] is None:
-            ds = tf.data.TFRecordDataset(self._files[file_idx])
-            parsed = []
-            for raw in ds:
-                features = tf.io.parse_single_example(
-                    raw,
-                    features={
-                        "image/encoded": tf.io.FixedLenFeature([], tf.string),
-                        "image/class/label": tf.io.FixedLenFeature([], tf.int64),
-                    },
-                )
-                parsed.append(
-                    {
-                        "image_bytes": features["image/encoded"].numpy(),
-                        "label": int(features["image/class/label"].numpy()),
-                    }
-                )
-            self._file_data[file_idx] = parsed
-
-        return self._file_data[file_idx][local_idx]
+        data = msgpack.unpackb(raw_bytes, raw=False)
+        label = data["label"] + self.label_offset
+        return {"image_bytes": data["image"], "label": label}
 
 
 class DecodeOp(grain.MapTransform):
@@ -232,11 +257,16 @@ def create_dataloader(
     worker_id: int = 0,
     num_workers: int = 1,
     use_synthetic: bool = False,
+    labels_one_indexed: bool = True,
+    shuffle: bool = False,  # Disabled by default (gcsfuse random access is slow)
+    prefetch_workers: int = 2,  # Number of prefetch workers (0 = no prefetch)
 ) -> grain.DataLoader:
     """Create Grain dataloader for ImageNet.
 
     Args:
-        data_dir: GCS path containing train/ and validation/ subdirs with TFRecords
+        data_dir: Path to ArrayRecord files (GCS or local).
+                  For GCS paths (gs://...), the bucket will be mounted via gcsfuse.
+                  Expected structure: {data_dir}/train_arrayrecord/ and validation_arrayrecord/
         batch_size: Per-device batch size
         image_size: Target image size (260 for EfficientNet-B2)
         is_training: Training or evaluation mode
@@ -244,6 +274,10 @@ def create_dataloader(
         worker_id: Current worker index (for multi-node)
         num_workers: Total number of workers
         use_synthetic: Use synthetic data for testing (no GCS needed)
+        labels_one_indexed: If True, labels are 1-1000 and will be converted to 0-999.
+                           Most ImageNet TFRecords use 1-indexed labels.
+        shuffle: Whether to shuffle data. Default False (gcsfuse random access is slow).
+        prefetch_workers: Number of background workers for prefetching (0 = disabled).
 
     Returns:
         Grain DataLoader yielding batches of {"image": [...], "label": [...]}
@@ -257,14 +291,46 @@ def create_dataloader(
         )
         operations = [grain.Batch(batch_size, drop_remainder=True)]
     else:
-        split = "train" if is_training else "validation"
-        pattern = f"{data_dir}/{split}/*.tfrecord"
-        log.info(f"Loading ImageNet from {pattern}")
+        # Mount GCS if needed
+        local_data_dir = ensure_gcs_accessible(data_dir)
 
-        source = TFRecordSource(pattern, shuffle_files=is_training)
+        # Select split
+        split_name = "train_arrayrecord" if is_training else "validation_arrayrecord"
+        split_path = os.path.join(local_data_dir, split_name)
+
+        if not os.path.exists(split_path):
+            raise FileNotFoundError(
+                f"ArrayRecord directory not found: {split_path}\n"
+                f"Run convert_to_arrayrecord.py to convert TFRecords first."
+            )
+
+        log.info(f"Loading ImageNet from {split_path}")
+
+        # Find all ArrayRecord files in the directory
+        arrayrecord_files = sorted(
+            [
+                os.path.join(split_path, f)
+                for f in os.listdir(split_path)
+                if f.endswith(".arrayrecord")
+            ]
+        )
+        if not arrayrecord_files:
+            raise FileNotFoundError(
+                f"No .arrayrecord files found in {split_path}\n"
+                f"Run convert_to_arrayrecord.py to convert TFRecords first."
+            )
+        log.info(f"Found {len(arrayrecord_files)} ArrayRecord files")
+
+        # Use Grain's built-in ArrayRecordDataSource with file list
+        source = grain.ArrayRecordDataSource(arrayrecord_files)
+        log.info(f"Total examples: {len(source)}")
+
+        # Convert 1-indexed labels (1-1000) to 0-indexed (0-999) if needed
+        label_offset = -1 if labels_one_indexed else 0
 
         if is_training:
             operations = [
+                ParseMsgpackOp(label_offset=label_offset),
                 DecodeOp(),
                 RandomResizedCropOp(size=image_size),
                 RandomHorizontalFlipOp(),
@@ -273,11 +339,14 @@ def create_dataloader(
             ]
         else:
             operations = [
+                ParseMsgpackOp(label_offset=label_offset),
                 DecodeOp(),
                 CenterCropOp(size=image_size),
                 NormalizeOp(),
                 grain.Batch(batch_size, drop_remainder=True),
             ]
+
+    log.info(f"DataLoader: shuffle={shuffle}, prefetch_workers={prefetch_workers}")
 
     return grain.DataLoader(
         data_source=source,
@@ -285,10 +354,11 @@ def create_dataloader(
             num_records=len(source),
             num_epochs=None,  # Infinite iteration
             seed=seed,
-            shuffle=is_training,
+            shuffle=shuffle,
             shard_options=grain.ShardOptions(
                 worker_id, num_workers, drop_remainder=True
             ),
         ),
         operations=operations,
+        worker_count=prefetch_workers,
     )

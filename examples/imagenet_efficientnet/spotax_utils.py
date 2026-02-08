@@ -54,7 +54,12 @@ T = TypeVar("T")
 
 @dataclass
 class SpotConfig:
-    """Configuration from SpotJAX environment variables."""
+    """Configuration from SpotJAX environment variables.
+
+    Note: worker_id and num_workers are provided for convenience but
+    after calling setup_distributed(), you should use jax.process_index()
+    and jax.process_count() instead for JAX-native values.
+    """
 
     checkpoint_dir: str
     log_dir: str
@@ -62,11 +67,10 @@ class SpotConfig:
     is_restart: bool
     worker_id: int = 0
     num_workers: int = 1
-    coordinator_address: str | None = None
 
     @property
     def is_multi_node(self) -> bool:
-        """True if running on multiple TPU VMs (v4-16+)."""
+        """True if running on multiple TPU VMs."""
         return self.num_workers > 1
 
     @property
@@ -76,7 +80,11 @@ class SpotConfig:
 
 
 def get_config() -> SpotConfig:
-    """Load configuration from environment variables."""
+    """Load configuration from environment variables.
+
+    Note: Call setup_distributed() after this to initialize JAX distributed.
+    JAX will auto-detect TPU topology - no manual coordinator config needed.
+    """
     checkpoint_dir = os.environ.get("SPOT_CHECKPOINT_DIR", "")
     if not checkpoint_dir:
         raise ValueError("SPOT_CHECKPOINT_DIR not set. Run with: spotax run ...")
@@ -88,33 +96,33 @@ def get_config() -> SpotConfig:
         is_restart=os.environ.get("SPOT_IS_RESTART", "").lower() == "true",
         worker_id=int(os.environ.get("SPOT_WORKER_ID", "0")),
         num_workers=int(os.environ.get("SPOT_NUM_WORKERS", "1")),
-        coordinator_address=os.environ.get("JAX_COORDINATOR_ADDRESS"),
     )
 
 
 def setup_distributed(config: SpotConfig | None = None) -> None:
     """Initialize JAX distributed runtime for multi-node training.
 
-    Only needed for v4-16+ (multiple TPU VMs). For v4-8 (single VM),
-    this is a no-op - JAX automatically uses all local TPU chips.
+    On Cloud TPU, JAX auto-detects coordinator address, process count,
+    and process ID from TPU metadata - no manual configuration needed.
+
+    This enables checkpointing and health checking features even on
+    single-node TPUs.
     """
     if config is None:
         config = get_config()
 
-    if not config.is_multi_node:
-        # Single node - JAX uses all local TPU chips automatically
-        logger.info(f"Single-node mode: {jax.device_count()} devices")
-        return
+    # Let JAX auto-detect everything from TPU metadata
+    # Works for both single-node and multi-node TPU pods
+    jax.distributed.initialize()
 
-    if not config.coordinator_address:
-        raise ValueError("JAX_COORDINATOR_ADDRESS not set for multi-node training")
+    num_devices = jax.device_count()
+    num_processes = jax.process_count()
+    process_id = jax.process_index()
 
-    jax.distributed.initialize(
-        coordinator_address=config.coordinator_address,
-        num_processes=config.num_workers,
-        process_id=config.worker_id,
-    )
-    logger.info(f"Multi-node mode: {jax.device_count()} devices across {jax.process_count()} hosts")
+    if num_processes == 1:
+        logger.info(f"Single-node mode: {num_devices} devices")
+    else:
+        logger.info(f"Multi-node mode: {num_devices} devices across {num_processes} hosts (process {process_id})")
 
 
 class CheckpointManager:
@@ -177,21 +185,28 @@ class CheckpointManager:
             logger.info(f"Saved checkpoint at step {step}")
         return saved
 
-    def restore(self, step: int | None = None) -> tuple[Any, int]:
-        """Restore checkpoint. Returns (state, step)."""
+    def restore(self, step: int | None = None, reference_state: Any = None) -> tuple[Any, int]:
+        """Restore checkpoint. Returns (state, step).
+
+        Args:
+            step: Step to restore (default: latest)
+            reference_state: Reference state for structure matching.
+                Must be provided so Orbax restores into the correct pytree structure.
+        """
         if step is None:
             step = self.latest_step
         if step is None:
             raise ValueError(f"No checkpoints in {self.checkpoint_dir}")
 
-        result = self._manager.restore(step, args=ocp.args.Composite(state=ocp.args.StandardRestore()))
+        restore_args = ocp.args.StandardRestore(reference_state) if reference_state is not None else ocp.args.StandardRestore()
+        result = self._manager.restore(step, args=ocp.args.Composite(state=restore_args))
         logger.info(f"Restored checkpoint from step {step}")
         return result["state"], step
 
     def restore_or_init(self, init_state: T, init_step: int = 0) -> tuple[T, int]:
         """Restore latest checkpoint, or return init_state if none exists."""
         if self.latest_step is not None:
-            return self.restore()
+            return self.restore(reference_state=init_state)
         return init_state, init_step
 
     def reached_preemption(self, step: int) -> bool:
