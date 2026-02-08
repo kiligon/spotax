@@ -72,7 +72,8 @@ class Orchestrator:
         self.tpu_name: str | None = None
         self.tpu_provider: TPUProvider | None = None
         self.cluster_runner: ClusterRunner | None = None
-        self.node_ips: list[str] = []
+        self.node_ips: list[str] = []  # External IPs for SSH
+        self.node_internal_ips: list[str] = []  # Internal IPs for JAX distributed
         self.log_dir: Path | None = None
         self.logger_manager: NodeLoggerManager | None = None
         self.watchdog: CheckpointWatchdog | None = None
@@ -112,10 +113,14 @@ class Orchestrator:
         console.print()
 
         # Ensure GCS bucket exists for checkpoints/logs
+        # Create bucket in same region as TPU for best performance
+        # e.g., "us-central1-a" -> "us-central1"
+        tpu_region = self.config.tpu.zone.rsplit("-", 1)[0]
         try:
             await ensure_bucket_exists(
                 bucket_name=self.config.storage.bucket,
                 project=self.config.tpu.project,
+                location=tpu_region,
             )
         except Exception as e:
             print_error(f"Failed to setup GCS bucket: {e}")
@@ -124,9 +129,9 @@ class Orchestrator:
         # Main retry loop
         while self._attempt <= self._max_retries:
             if self._attempt > 0:
-                print_header(f"Retry attempt {self._attempt}/{self._max_retries}") # i am not sure but we run first single attemp so it's shoudnt be a retry what you think?
+                print_header(f"Retry attempt {self._attempt}/{self._max_retries}")
 
-            result = await self._run_single_attempt() # maybe think on naming strait forward for attemp but don't reflet the function itself
+            result = await self._run_single_attempt()
 
             if result.result == RunResult.SUCCESS:
                 print_success("Training completed successfully!")
@@ -276,8 +281,9 @@ class Orchestrator:
             raise TPUProviderError("TPU provisioning timed out")
 
         # Get node IPs
-        # Use external IPs for SSH access
+        # External IPs for SSH access, internal IPs for JAX distributed coordination
         self.node_ips = await self.tpu_provider.get_node_external_ips(self.tpu_name)
+        self.node_internal_ips = await self.tpu_provider.get_node_internal_ips(self.tpu_name)
         if len(self.node_ips) == 1:
             print_status("TPU ready")
         else:
@@ -394,6 +400,11 @@ class Orchestrator:
                 f'{venv_prefix}bash $HOME/spotax-code/spotax_setup.sh',
                 timeout=600,  # 10 minute timeout for setup script
             )
+            # Show setup script output
+            for node_id, result in results.items():
+                if result.stdout.strip():
+                    for line in result.stdout.strip().split('\n'):
+                        console.print(f"  [node]{line}[/node]")
             failed = [n for n, r in results.items() if not r.success]
             if failed:
                 for node_id in failed:
@@ -478,7 +489,8 @@ class Orchestrator:
         script_relative = self.config.run.script.relative_to(self.config.run.code_dir)
 
         # Build environment variables for each node
-        coordinator_ip = self.node_ips[0]
+        # Use internal IP for JAX coordinator (external IPs may block port 1234)
+        coordinator_ip = self.node_internal_ips[0]
 
         with self.logger_manager:
             # Callbacks for streaming output
@@ -550,7 +562,12 @@ class Orchestrator:
                         if self._shutdown_event.is_set():
                             return 130
 
-                        return process.exit_status or 0
+                        if process.exit_status is None:
+                            raise SSHConnectionError(
+                                f"Node {node_id} connection lost (no exit status)"
+                            )
+
+                        return process.exit_status
 
                 except Exception as e:
                     stderr_callback(node_id, f"Error: {e}")
@@ -638,6 +655,7 @@ class Orchestrator:
 
         # Reset node IPs for next attempt
         self.node_ips = []
+        self.node_internal_ips = []
 
         self._cleanup_done.set()
         print_success("Cleanup complete")

@@ -6,16 +6,10 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
-
 from google.api_core import exceptions as gcp_exceptions
 from google.cloud import tpu_v2
 
 from spotax.utils.logging import console, create_progress, print_status, print_warning
-
-if TYPE_CHECKING:
-    pass
-
 
 class QueuedResourceState(str, Enum):
     """States for a QueuedResource."""
@@ -79,7 +73,6 @@ class TPUProvider:
 
         # Lazy-init clients to avoid blocking on import
         self._tpu_client: tpu_v2.TpuClient | None = None
-        self._queued_client: tpu_v2.TpuClient | None = None
 
     @property
     def tpu_client(self) -> tpu_v2.TpuClient:
@@ -239,7 +232,7 @@ class TPUProvider:
 
         return False
 
-    async def get_node_ips(self, name: str) -> list[str]:
+    async def get_node_internal_ips(self, name: str) -> list[str]:
         """Get internal IPs of all nodes in a TPU slice.
 
         Args:
@@ -262,7 +255,7 @@ class TPUProvider:
                 ips.append(endpoint.ip_address)
 
         if not ips:
-            raise TPUProviderError(f"No network endpoints found for TPU {name}")
+            raise TPUProviderError(f"No internal IPs found for TPU {name}")
 
         return ips
 
