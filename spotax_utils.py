@@ -177,21 +177,28 @@ class CheckpointManager:
             logger.info(f"Saved checkpoint at step {step}")
         return saved
 
-    def restore(self, step: int | None = None) -> tuple[Any, int]:
-        """Restore checkpoint. Returns (state, step)."""
+    def restore(self, step: int | None = None, reference_state: Any = None) -> tuple[Any, int]:
+        """Restore checkpoint. Returns (state, step).
+
+        Args:
+            step: Step to restore (default: latest)
+            reference_state: Reference state for structure matching.
+                Must be provided so Orbax restores into the correct pytree structure.
+        """
         if step is None:
             step = self.latest_step
         if step is None:
             raise ValueError(f"No checkpoints in {self.checkpoint_dir}")
 
-        result = self._manager.restore(step, args=ocp.args.Composite(state=ocp.args.StandardRestore()))
+        restore_args = ocp.args.StandardRestore(reference_state) if reference_state is not None else ocp.args.StandardRestore()
+        result = self._manager.restore(step, args=ocp.args.Composite(state=restore_args))
         logger.info(f"Restored checkpoint from step {step}")
         return result["state"], step
 
     def restore_or_init(self, init_state: T, init_step: int = 0) -> tuple[T, int]:
         """Restore latest checkpoint, or return init_state if none exists."""
         if self.latest_step is not None:
-            return self.restore()
+            return self.restore(reference_state=init_state)
         return init_state, init_step
 
     def reached_preemption(self, step: int) -> bool:
