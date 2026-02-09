@@ -1,5 +1,7 @@
 # GSM8K Math SFT Example
 
+> **Note:** This example is under development and may not be fully functional yet.
+
 A minimal example of supervised fine-tuning (SFT) using SpotJAX on TPUs.
 
 ## What This Does

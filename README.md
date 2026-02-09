@@ -130,7 +130,7 @@ spotax run <script> [options]
 ## Examples
 
 - **[ImageNet EfficientNet](examples/imagenet_efficientnet/)** - Train EfficientNet-B2 on ImageNet-1K with ArrayRecord data pipeline
-- **[Simple Math SFT](examples/simple_math_sft/)** - Fine-tune Qwen3 on GSM8K math problems
+- **[Simple Math SFT](examples/simple_math_sft/)** - Fine-tune Qwen3 on GSM8K math problems *(under development)*
 
 ## Requirements
 
