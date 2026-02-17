@@ -99,11 +99,11 @@ def train(
 ):
     # Setup
     cfg = get_config()
-    setup_distributed(cfg)
+    setup_distributed()
     setup_mesh()  # Create mesh for sharding across all TPU devices
     ckpt_dir = cfg.checkpoint_dir
-    worker_id = cfg.worker_id
-    num_workers = cfg.num_workers
+    worker_id = jax.process_index()
+    num_workers = jax.process_count()
 
     log.info(f"Worker {worker_id}/{num_workers}, devices: {jax.device_count()}")
 

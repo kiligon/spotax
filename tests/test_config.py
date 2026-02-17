@@ -163,22 +163,17 @@ class TestSpotJAXConfig:
                 job_id="test-job",
             )
 
-            # Test multi-node setup (num_workers > 1)
-            env = config.get_env_vars(worker_id=0, num_workers=2, coordinator_ip="10.0.0.1")
+            env = config.get_env_vars()
 
             assert env["SPOT_CHECKPOINT_DIR"] == "gs://test-bucket/test-job/ckpt"
             assert env["SPOT_LOG_DIR"] == "gs://test-bucket/test-job/logs"
             assert env["SPOT_JOB_ID"] == "test-job"
             assert env["SPOT_IS_RESTART"] == "false"
-            assert env["SPOT_WORKER_ID"] == "0"
-            assert env["SPOT_NUM_WORKERS"] == "2"
-            assert env["JAX_COORDINATOR_ADDRESS"] == "10.0.0.1:1234"
 
-            # Test single-node setup (num_workers = 1) - no distributed vars
-            env_single = config.get_env_vars(worker_id=0, num_workers=1)
-            assert "SPOT_WORKER_ID" not in env_single
-            assert "SPOT_NUM_WORKERS" not in env_single
-            assert "JAX_COORDINATOR_ADDRESS" not in env_single
+            # JAX auto-discovers TPU topology, no distributed vars needed
+            assert "SPOT_WORKER_ID" not in env
+            assert "SPOT_NUM_WORKERS" not in env
+            assert "JAX_COORDINATOR_ADDRESS" not in env
 
     def test_get_env_vars_is_restart(self):
         """Test environment variable generation with is_restart=True."""
@@ -193,16 +188,10 @@ class TestSpotJAXConfig:
                 job_id="test-job",
             )
 
-            # Test with is_restart=False (default)
-            env_first_run = config.get_env_vars(
-                worker_id=0, num_workers=2, coordinator_ip="10.0.0.1", is_restart=False
-            )
+            env_first_run = config.get_env_vars(is_restart=False)
             assert env_first_run["SPOT_IS_RESTART"] == "false"
 
-            # Test with is_restart=True
-            env_restart = config.get_env_vars(
-                worker_id=0, num_workers=2, coordinator_ip="10.0.0.1", is_restart=True
-            )
+            env_restart = config.get_env_vars(is_restart=True)
             assert env_restart["SPOT_IS_RESTART"] == "true"
 
 

@@ -73,7 +73,6 @@ class Orchestrator:
         self.tpu_provider: TPUProvider | None = None
         self.cluster_runner: ClusterRunner | None = None
         self.node_ips: list[str] = []  # External IPs for SSH
-        self.node_internal_ips: list[str] = []  # Internal IPs for JAX distributed
         self.log_dir: Path | None = None
         self.logger_manager: NodeLoggerManager | None = None
         self.watchdog: CheckpointWatchdog | None = None
@@ -280,10 +279,9 @@ class Orchestrator:
         if not ready:
             raise TPUProviderError("TPU provisioning timed out")
 
-        # Get node IPs
-        # External IPs for SSH access, internal IPs for JAX distributed coordination
+        # Get external IPs for SSH access
+        # JAX auto-discovers TPU topology for distributed coordination
         self.node_ips = await self.tpu_provider.get_node_external_ips(self.tpu_name)
-        self.node_internal_ips = await self.tpu_provider.get_node_internal_ips(self.tpu_name)
         if len(self.node_ips) == 1:
             print_status("TPU ready")
         else:
@@ -359,10 +357,10 @@ class Orchestrator:
         return hashlib.sha256(content).hexdigest()[:16]  # Use first 16 chars
 
     async def _install_dependencies(self) -> None:
-        """Install Python dependencies using uv with a Python 3.11+ venv.
+        """Install Python dependencies using uv with a Python 3.12+ venv.
 
         Uses uv for fast, reliable package installation. Creates a venv with
-        Python 3.11+ since JAX 0.8+ requires it.
+        Python 3.12+ since JAX 0.8+ and MaxText require it.
         """
         if not self.cluster_runner:
             raise RuntimeError("SSH not connected")
@@ -378,10 +376,10 @@ class Orchestrator:
         venv_dir = "$HOME/spotax-venv"
         uv_prefix = 'export PATH="$HOME/.local/bin:$PATH" && '
 
-        # Create venv with Python 3.11 (uv downloads it automatically if needed)
-        print_status("Creating Python 3.11 virtual environment...")
+        # Create venv with Python 3.12 (uv downloads it automatically if needed)
+        print_status("Creating Python 3.12 virtual environment...")
         results = await self.cluster_runner.run_command(
-            f'{uv_prefix}uv venv {venv_dir} --python 3.11',
+            f'{uv_prefix}uv venv {venv_dir} --python 3.12',
             timeout=300,  # May need to download Python
         )
         failed = [n for n, r in results.items() if not r.success]
@@ -488,9 +486,9 @@ class Orchestrator:
         # Build the command
         script_relative = self.config.run.script.relative_to(self.config.run.code_dir)
 
-        # Build environment variables for each node
-        # Use internal IP for JAX coordinator (external IPs may block port 1234)
-        coordinator_ip = self.node_internal_ips[0]
+        # Environment variables are the same for all nodes
+        # JAX auto-discovers TPU topology (coordinator, process IDs)
+        env = self.config.get_env_vars(is_restart=is_restart)
 
         with self.logger_manager:
             # Callbacks for streaming output
@@ -503,12 +501,6 @@ class Orchestrator:
                     self.logger_manager.get(node_id).write_stderr(line)
 
             async def run_on_node(node_id: int) -> int:
-                env = self.config.get_env_vars(
-                    worker_id=node_id,
-                    num_workers=len(self.node_ips),  # Actual host count from GCP API
-                    coordinator_ip=coordinator_ip,
-                    is_restart=is_restart,
-                )
 
                 # Build command with env vars, using the venv's Python
                 env_str = " ".join(f'{k}="{v}"' for k, v in env.items())
@@ -655,7 +647,6 @@ class Orchestrator:
 
         # Reset node IPs for next attempt
         self.node_ips = []
-        self.node_internal_ips = []
 
         self._cleanup_done.set()
         print_success("Cleanup complete")

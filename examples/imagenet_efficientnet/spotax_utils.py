@@ -30,9 +30,6 @@ Environment variables (set by SpotJAX CLI):
     SPOT_LOG_DIR - GCS path for logs
     SPOT_JOB_ID - Unique job identifier
     SPOT_IS_RESTART - "true" if resuming after preemption
-
-For multi-node TPU (v4-16+), also set automatically:
-    SPOT_WORKER_ID, SPOT_NUM_WORKERS, JAX_COORDINATOR_ADDRESS
 """
 
 from __future__ import annotations
@@ -54,37 +51,16 @@ T = TypeVar("T")
 
 @dataclass
 class SpotConfig:
-    """Configuration from SpotJAX environment variables.
-
-    Note: worker_id and num_workers are provided for convenience but
-    after calling setup_distributed(), you should use jax.process_index()
-    and jax.process_count() instead for JAX-native values.
-    """
+    """Configuration from SpotJAX environment variables."""
 
     checkpoint_dir: str
     log_dir: str
     job_id: str
     is_restart: bool
-    worker_id: int = 0
-    num_workers: int = 1
-
-    @property
-    def is_multi_node(self) -> bool:
-        """True if running on multiple TPU VMs."""
-        return self.num_workers > 1
-
-    @property
-    def is_coordinator(self) -> bool:
-        """True if this is the coordinator node (always True for single-node)."""
-        return self.worker_id == 0
 
 
 def get_config() -> SpotConfig:
-    """Load configuration from environment variables.
-
-    Note: Call setup_distributed() after this to initialize JAX distributed.
-    JAX will auto-detect TPU topology - no manual coordinator config needed.
-    """
+    """Load configuration from environment variables."""
     checkpoint_dir = os.environ.get("SPOT_CHECKPOINT_DIR", "")
     if not checkpoint_dir:
         raise ValueError("SPOT_CHECKPOINT_DIR not set. Run with: spotax run ...")
@@ -94,25 +70,16 @@ def get_config() -> SpotConfig:
         log_dir=os.environ.get("SPOT_LOG_DIR", ""),
         job_id=os.environ.get("SPOT_JOB_ID", "unknown"),
         is_restart=os.environ.get("SPOT_IS_RESTART", "").lower() == "true",
-        worker_id=int(os.environ.get("SPOT_WORKER_ID", "0")),
-        num_workers=int(os.environ.get("SPOT_NUM_WORKERS", "1")),
     )
 
 
-def setup_distributed(config: SpotConfig | None = None) -> None:
-    """Initialize JAX distributed runtime for multi-node training.
+def setup_distributed() -> None:
+    """Initialize JAX distributed runtime.
 
-    On Cloud TPU, JAX auto-detects coordinator address, process count,
-    and process ID from TPU metadata - no manual configuration needed.
-
-    This enables checkpointing and health checking features even on
-    single-node TPUs.
+    On Cloud TPU, JAX auto-discovers coordinator address, process count,
+    and process ID from TPU metadata — no manual configuration needed.
+    Works for both single-node and multi-node TPU slices.
     """
-    if config is None:
-        config = get_config()
-
-    # Let JAX auto-detect everything from TPU metadata
-    # Works for both single-node and multi-node TPU pods
     jax.distributed.initialize()
 
     num_devices = jax.device_count()

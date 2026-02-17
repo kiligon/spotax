@@ -243,35 +243,22 @@ class SpotJAXConfig(BaseModel):
 
     def get_env_vars(
         self,
-        worker_id: int = 0,
-        num_workers: int = 1,
-        coordinator_ip: str | None = None,
         is_restart: bool = False,
     ) -> dict[str, str]:
         """Get environment variables to inject into remote environment.
 
+        JAX auto-discovers TPU topology (coordinator, process count, process ID)
+        so we only need to pass SpotJAX-specific variables.
+
         Args:
-            worker_id: The worker/node ID (0-indexed)
-            num_workers: Actual number of workers/hosts (from len(node_ips))
-            coordinator_ip: IP address of the coordinator node (only for multi-node)
             is_restart: Whether this is a restart after preemption
 
         Returns:
             Dictionary of environment variables
         """
-        env = {
+        return {
             "SPOT_CHECKPOINT_DIR": self.storage.checkpoint_dir,
             "SPOT_LOG_DIR": self.storage.log_dir,
             "SPOT_JOB_ID": self.storage.job_id,
             "SPOT_IS_RESTART": "true" if is_restart else "false",
         }
-
-        # Only add multi-node variables if we have multiple hosts
-        # Note: num_workers is the actual host count from GCP API, not calculated from chip count
-        if num_workers > 1:
-            env["SPOT_WORKER_ID"] = str(worker_id)
-            env["SPOT_NUM_WORKERS"] = str(num_workers)
-            if coordinator_ip:
-                env["JAX_COORDINATOR_ADDRESS"] = f"{coordinator_ip}:1234"
-
-        return env

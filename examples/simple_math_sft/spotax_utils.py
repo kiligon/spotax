@@ -31,9 +31,6 @@ Environment variables (set by SpotJAX CLI):
     SPOT_LOG_DIR - GCS path for logs
     SPOT_JOB_ID - Unique job identifier
     SPOT_IS_RESTART - "true" if resuming after preemption
-
-For multi-node TPU (v4-16+), also set automatically:
-    SPOT_WORKER_ID, SPOT_NUM_WORKERS, JAX_COORDINATOR_ADDRESS
 """
 
 from __future__ import annotations
@@ -61,19 +58,6 @@ class SpotConfig:
     log_dir: str
     job_id: str
     is_restart: bool
-    worker_id: int = 0
-    num_workers: int = 1
-    coordinator_address: str | None = None
-
-    @property
-    def is_multi_node(self) -> bool:
-        """True if running on multiple TPU VMs (v4-16+)."""
-        return self.num_workers > 1
-
-    @property
-    def is_coordinator(self) -> bool:
-        """True if this is the coordinator node (always True for single-node)."""
-        return self.worker_id == 0
 
 
 def get_config() -> SpotConfig:
@@ -87,35 +71,26 @@ def get_config() -> SpotConfig:
         log_dir=os.environ.get("SPOT_LOG_DIR", ""),
         job_id=os.environ.get("SPOT_JOB_ID", "unknown"),
         is_restart=os.environ.get("SPOT_IS_RESTART", "").lower() == "true",
-        worker_id=int(os.environ.get("SPOT_WORKER_ID", "0")),
-        num_workers=int(os.environ.get("SPOT_NUM_WORKERS", "1")),
-        coordinator_address=os.environ.get("JAX_COORDINATOR_ADDRESS"),
     )
 
 
-def setup_distributed(config: SpotConfig | None = None) -> None:
-    """Initialize JAX distributed runtime for multi-node training.
+def setup_distributed() -> None:
+    """Initialize JAX distributed runtime.
 
-    Only needed for v4-16+ (multiple TPU VMs). For v4-8 (single VM),
-    this is a no-op - JAX automatically uses all local TPU chips.
+    On Cloud TPU, JAX auto-discovers coordinator address, process count,
+    and process ID from TPU metadata — no manual configuration needed.
+    Works for both single-node and multi-node TPU slices.
     """
-    if config is None:
-        config = get_config()
+    jax.distributed.initialize()
 
-    if not config.is_multi_node:
-        # Single node - JAX uses all local TPU chips automatically
-        logger.info(f"Single-node mode: {jax.device_count()} devices")
-        return
+    num_devices = jax.device_count()
+    num_processes = jax.process_count()
+    process_id = jax.process_index()
 
-    if not config.coordinator_address:
-        raise ValueError("JAX_COORDINATOR_ADDRESS not set for multi-node training")
-
-    jax.distributed.initialize(
-        coordinator_address=config.coordinator_address,
-        num_processes=config.num_workers,
-        process_id=config.worker_id,
-    )
-    logger.info(f"Multi-node mode: {jax.device_count()} devices across {jax.process_count()} hosts")
+    if num_processes == 1:
+        logger.info(f"Single-node mode: {num_devices} devices")
+    else:
+        logger.info(f"Multi-node mode: {num_devices} devices across {num_processes} hosts (process {process_id})")
 
 
 class CheckpointManager:

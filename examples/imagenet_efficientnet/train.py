@@ -121,11 +121,11 @@ def train(
     """
     # Setup distributed training
     cfg = get_config()
-    setup_distributed(cfg)
+    setup_distributed()
 
     ckpt_dir = cfg.checkpoint_dir
-    worker_id = cfg.worker_id
-    num_workers = cfg.num_workers
+    worker_id = jax.process_index()
+    num_workers = jax.process_count()
     num_devices = jax.device_count()
 
     log.info(f"Worker {worker_id}/{num_workers}, devices: {num_devices}, "

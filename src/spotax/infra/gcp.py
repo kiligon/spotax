@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from dataclasses import dataclass
 from enum import Enum
+
 from google.api_core import exceptions as gcp_exceptions
 from google.cloud import tpu_v2
 
 from spotax.utils.logging import console, create_progress, print_status, print_warning
+
 
 class QueuedResourceState(str, Enum):
     """States for a QueuedResource."""
@@ -24,15 +25,6 @@ class QueuedResourceState(str, Enum):
     SUSPENDING = "SUSPENDING"
     SUSPENDED = "SUSPENDED"
     WAITING_FOR_RESOURCES = "WAITING_FOR_RESOURCES"
-
-
-@dataclass
-class TPUNode:
-    """Represents a single node in a TPU slice."""
-
-    name: str
-    internal_ip: str
-    external_ip: str | None = None
 
 
 class TPUProviderError(Exception):
@@ -231,33 +223,6 @@ class TPUProvider:
                 elapsed += poll_interval
 
         return False
-
-    async def get_node_internal_ips(self, name: str) -> list[str]:
-        """Get internal IPs of all nodes in a TPU slice.
-
-        Args:
-            name: Node name (just the ID, not full path)
-
-        Returns:
-            List of internal IP addresses, one per node
-        """
-        full_name = self._get_node_name(name)
-        request = tpu_v2.GetNodeRequest(name=full_name)
-
-        try:
-            node = await asyncio.to_thread(self.tpu_client.get_node, request=request)
-        except gcp_exceptions.NotFound as e:
-            raise TPUNotFoundError(f"TPU node {name} not found") from e
-
-        ips = []
-        for endpoint in node.network_endpoints:
-            if endpoint.ip_address:
-                ips.append(endpoint.ip_address)
-
-        if not ips:
-            raise TPUProviderError(f"No internal IPs found for TPU {name}")
-
-        return ips
 
     async def get_node_external_ips(self, name: str) -> list[str]:
         """Get external IPs of all nodes in a TPU slice.
