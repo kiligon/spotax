@@ -81,16 +81,3 @@ HuggingFace model weights must be converted to MaxText's Orbax format before tra
 
 Conversion takes ~5 minutes for Qwen3-0.6B and uses PyTorch CPU (installed by `spotax_setup.sh`).
 
-## Comparison with simple_math_sft Example
-
-| | simple_math_sft | maxtext_qwen3_sft |
-|---|---|---|
-| Framework | Custom loop (Bonsai + Flax NNX) | MaxText |
-| Lines of training code | ~180 | ~30 (wrapper only) |
-| Checkpointing | Manual (spotax_utils.py) | MaxText built-in |
-| Data loading | Grain (custom) | MaxText built-in (HF datasets) |
-| Distributed init | `jax.distributed.initialize()` | MaxText handles it |
-| Model support | Qwen3 only (via Bonsai) | Many models (Qwen3, Llama, Gemma, DeepSeek, ...) |
-| Setup complexity | Bonsai patches in setup script | Clone + install MaxText |
-
-Use **simple_math_sft** to learn how JAX training works from scratch. Use **maxtext_qwen3_sft** for production-oriented training with MaxText's optimizations.

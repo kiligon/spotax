@@ -54,7 +54,7 @@ Copy this file from [`examples/`](examples/) into your project. It provides chec
 from spotax_utils import CheckpointManager, get_config, setup_distributed
 
 config = get_config()
-setup_distributed(config)  # Required for multi-node (v4-16+), no-op for single-node
+setup_distributed()  # Initialize JAX distributed runtime
 
 ckpt = CheckpointManager(config.checkpoint_dir, save_interval_steps=1000)
 state, start_step = ckpt.restore_or_init(initial_state)
@@ -102,13 +102,7 @@ SpotJAX injects these into your training script (read them via `get_config()`):
 | `SPOT_JOB_ID` | Unique job identifier |
 | `SPOT_IS_RESTART` | `"true"` if resuming after preemption |
 
-Multi-node only (automatically set for v4-16+, v5litepod-4+, etc.):
-
-| Variable | Description |
-|---|---|
-| `SPOT_WORKER_ID` | Node index (0 to N-1) |
-| `SPOT_NUM_WORKERS` | Total node count |
-| `JAX_COORDINATOR_ADDRESS` | Internal IP:port for JAX distributed |
+JAX auto-discovers TPU topology (coordinator address, process count, process ID) from TPU metadata — no manual configuration needed for multi-node.
 
 ## CLI Reference
 
@@ -130,7 +124,7 @@ spotax run <script> [options]
 ## Examples
 
 - **[ImageNet EfficientNet](examples/imagenet_efficientnet/)** - Train EfficientNet-B2 on ImageNet-1K with ArrayRecord data pipeline
-- **[Simple Math SFT](examples/simple_math_sft/)** - Fine-tune Qwen3 on GSM8K math problems *(under development)*
+- **[MaxText Qwen3 SFT](examples/maxtext_qwen3_sft/)** - Fine-tune Qwen3 on GSM8K math problems using MaxText
 
 ## Requirements
 
