@@ -1,4 +1,4 @@
-# SpotJAX
+# SpotAX
 
 CLI tool for running JAX training on Google Cloud Spot TPUs with automatic preemption recovery. Provisions TPUs, uploads code, runs training, and seamlessly retries when Spot instances get preempted.
 
